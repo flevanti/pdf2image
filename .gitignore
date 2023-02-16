@@ -1,2 +1,5 @@
 .DS_Store
 .idea
+/pdf2image
+output-*
+pdf_test_files
