@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -16,8 +15,6 @@ var pageFirst int
 var pageLast int
 var allPages bool
 var pagesToProcess int
-var useConcurrency bool
-var wg sync.WaitGroup
 var doc *fitz.Document
 var tmpDir string
 
@@ -33,7 +30,6 @@ func retrieveFlags() {
 	flag.StringVar(&filename, "filename", "", "Provide a filename")
 	flag.IntVar(&pageFirst, "first", firstPageForAllPages, "First page to process")
 	flag.IntVar(&pageLast, "last", lastPageForAllPages, "Last page to process")
-	flag.BoolVar(&useConcurrency, "c", false, "use concurrency?")
 
 	flag.Parse()
 
@@ -75,11 +71,6 @@ func main() {
 		fmt.Printf("Processing file [%s], pages [%d]...[%d]\n", filename, pageFirst, pageLast)
 		pagesToProcess = pageLast - pageFirst + 1
 	}
-	if useConcurrency {
-		fmt.Println("Concurrency is enabled")
-	} else {
-		fmt.Println("Concurrency is not enabled")
-	}
 
 	tsStart := time.Now()
 	convert()
@@ -87,7 +78,7 @@ func main() {
 
 }
 func convert() {
-	var numpages int = 0
+	var numpages int
 	var err error
 	doc, err = fitz.New(filename)
 	if err != nil {
@@ -101,7 +92,12 @@ func convert() {
 		pagesToProcess = numpages
 	}
 	fmt.Printf("File [%s] opened (%d pages)\n", filename, numpages)
-	defer doc.Close()
+	defer func(doc *fitz.Document) {
+		err := doc.Close()
+		if err != nil {
+			fmt.Printf("Error closing the pdf file, not that it matters at this point:%s\n", err.Error())
+		}
+	}(doc)
 
 	tmpDir = "output-" + time.Now().Format("20060102150405")
 	err = os.Mkdir(tmpDir, fs.ModePerm)
@@ -126,12 +122,8 @@ func convert() {
 		}
 		c++
 		fmt.Printf("Scanning page %d of %d (exported so far %d/%d)               \r", n, numpages, c, pagesToProcess)
-		wg.Add(1)
-		if useConcurrency {
-			go extractImage(n)
-		} else {
-			extractImage(n)
-		}
+
+		extractImage(n)
 
 		if !allPages && n > pageLast {
 			break
@@ -141,19 +133,17 @@ func convert() {
 	fmt.Println()
 
 	fmt.Println("Waiting for the go funcs to complete.... ")
-	wg.Wait()
 }
 
 func extractImage(pg int) {
 	var err error
-	defer wg.Done()
 	//please note n-1, pages in the doc start at zero
 	img, err := doc.ImagePNG(pg-1, 150)
 	if err != nil {
 		panic(err)
 	}
-
-	f, err := os.Create(filepath.Join(tmpDir, fmt.Sprintf("%04d.png", pg)))
+	targetFilename := "%04d.png"
+	f, err := os.Create(filepath.Join(tmpDir, fmt.Sprintf(targetFilename, pg)))
 	if err != nil {
 		panic(err)
 	}
@@ -163,5 +153,8 @@ func extractImage(pg int) {
 		panic(err)
 	}
 
-	f.Close()
+	err = f.Close()
+	if err != nil {
+		fmt.Printf("Error closing target filename [%s]: %s\n", targetFilename, err.Error())
+	}
 }
